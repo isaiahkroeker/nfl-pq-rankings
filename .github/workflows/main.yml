@@ -1,8 +1,10 @@
 name: NFL PQ Dashboard Update
+
 on:
   schedule:
     - cron: "23 * * * *"
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -10,19 +12,22 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
+          
       - name: Install dependencies
         run: pip install pandas numpy pytz
+        
       - name: Run Engine
         run: python update_rankings.py
+        
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: .
           publish_branch: gh-pages
-          destination_dir: .
           exclude_assets: '.github,update_rankings.py'
