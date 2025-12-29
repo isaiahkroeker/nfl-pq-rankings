@@ -31,12 +31,14 @@ jobs:
           git config --global user.name "NFL Stats Bot"
           git config --global user.email "actions@github.com"
           
-          # This tells git: "Forget everything else, ONLY look at index.html"
-          git reset 
+          # 1. Pull the latest changes from GitHub to sync up
+          git pull origin main --rebase
+          
+          # 2. Only stage the index.html file
           git add index.html
           
-          # Only commit if index.html actually changed
+          # 3. Commit only if there are changes
           git commit -m "Automated PQ Update" || exit 0
           
-          # Push only the index.html change to the main branch
-          git push --force origin main
+          # 4. Push it home
+          git push origin main
