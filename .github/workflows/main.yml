@@ -1,10 +1,10 @@
-name: Hourly NFL PQ Update
+name: NFL PQ Dashboard Update
 
 on:
   schedule:
-    - cron: "23 * * * *"          # Hourly update at :23
-    - cron: "*/15 13-23 * * 0,1"   # Every 15 mins (approx 8AM-7PM EST) on Sun/Mon
-  workflow_dispatch:              # Keeps the "Run Workflow" button active
+    - cron: "23 * * * *"          # Hourly
+    - cron: "*/15 13-23 * * 0,1"   # Every 15m on Game Days
+  workflow_dispatch:
 
 jobs:
   build:
@@ -12,24 +12,18 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-
       - name: Install dependencies
-        run: pip install pandas nfl_data_py pytz
-
-      - name: Run rankings script
+        run: pip install pandas numpy pytz
+      - name: Run Dashboard Engine
         run: python update_rankings.py
-
-      - name: Commit and push changes
+      - name: Commit and push
         run: |
           git config --global user.name "NFL Stats Bot"
           git config --global user.email "actions@github.com"
           git add index.html
-          git commit -m "Automated PQ Update" || exit 0
+          git commit -m "Live Update: Rankings & Player Stats" || exit 0
           git push
