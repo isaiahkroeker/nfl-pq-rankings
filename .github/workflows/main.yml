@@ -11,12 +11,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
       
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.9'
           
@@ -26,19 +24,20 @@ jobs:
       - name: Run Engine
         run: python update_rankings.py
         
-      - name: Push to Site
+      - name: Force Deploy Website
         run: |
           git config --global user.name "NFL Stats Bot"
           git config --global user.email "actions@github.com"
           
-          # 1. Pull the latest changes from GitHub to sync up
-          git pull origin main --rebase
+          # Move the fresh index.html to a safe spot
+          cp index.html /tmp/index.html
           
-          # 2. Only stage the index.html file
+          # Switch to a temporary state and bring ONLY the index.html back
+          git fetch origin main
+          git checkout main
+          cp /tmp/index.html .
+          
+          # Stage ONLY the html and push
           git add index.html
-          
-          # 3. Commit only if there are changes
           git commit -m "Automated PQ Update" || exit 0
-          
-          # 4. Push it home
           git push origin main
