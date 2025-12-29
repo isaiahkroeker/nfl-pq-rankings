@@ -4,7 +4,7 @@ from datetime import datetime
 import pytz
 import json
 
-# Stable Links
+# Data Links
 GAMES_URL = "https://github.com/nflverse/nfldata/raw/master/data/games.csv"
 TEAMS_URL = "https://raw.githubusercontent.com/nflverse/nflfastR-data/master/teams_colors_logos.csv"
 
@@ -13,23 +13,28 @@ def get_nfl_data():
     games = pd.read_csv(GAMES_URL)
     teams_meta = pd.read_csv(TEAMS_URL)
     
-    # SMART COLUMN MAPPING: This prevents the KeyError by finding existing columns
-    mapping = {
-        'team': ['team_abbr', 'team', 'team_id'],
-        'logo': ['team_logo_espn', 'logo_url', 'logo'],
-        'color': ['team_color', 'color', 'primary_color']
+    # --- SMART COLUMN DETECTION ---
+    # We look for the best match for each required piece of data
+    potential_cols = {
+        'team': ['team_abbr', 'team', 'team_id', 'abbr'],
+        'logo': ['team_logo_espn', 'logo_url', 'logo', 'team_logo_wikipedia'],
+        'color': ['team_color', 'color', 'primary_color'],
+        'conf': ['team_conf', 'conf', 'conference']
     }
     
     final_mapping = {}
-    for target, options in mapping.items():
+    for target, options in potential_cols.items():
         for opt in options:
             if opt in teams_meta.columns:
                 final_mapping[opt] = target
-                break
+                break # Stop at the first match found
                 
     teams_meta = teams_meta.rename(columns=final_mapping)
+    # Ensure we only keep the columns we found
+    teams_meta = teams_meta[[col for col in ['team', 'logo', 'color', 'conf'] if col in teams_meta.columns]]
+    # ------------------------------
 
-    # 2. Math Logic
+    # 2. PQ Math Logic
     played = games[(games['season'] == 2025) & (games['game_type'] == 'REG')].dropna(subset=['home_score']).copy()
     if played.empty: return pd.DataFrame()
 
@@ -39,7 +44,8 @@ def get_nfl_data():
     records = {}
     for t in team_list:
         tg = played[(played['home_team'] == t) | (played['away_team'] == t)]
-        wins = len(tg[((tg['home_team'] == t) & (tg['home_score'] > tg['away_score'])) | ((tg['away_team'] == t) & (tg['away_score'] > tg['home_score']))])
+        wins = len(tg[((tg['home_team'] == t) & (tg['home_score'] > tg['away_score'])) | 
+                     ((tg['away_team'] == t) & (tg['away_score'] > tg['home_score']))])
         records[t] = {'w': wins, 'l': len(tg)-wins, 'pct': wins/len(tg)}
 
     dashboard_data = []
@@ -47,7 +53,6 @@ def get_nfl_data():
         tg = played[(played['home_team'] == t) | (played['away_team'] == t)]
         pq = sum((((g['home_score'] - g['away_score']) if g['home_team'] == t else (g['away_score'] - g['home_score'])) * (records[g['away_team'] if g['home_team'] == t else g['home_team']]['pct'] + 0.1) * (0.95 ** (max_week - g['week']))) for _, g in tg.iterrows())
         
-        # Color coding status
         status, s_color = ("CLINCHED", "#28a745") if records[t]['w'] >= 10 else (("ELIMINATED", "#dc3545") if records[t]['w'] <= 6 else ("IN THE HUNT", "#007bff"))
 
         dashboard_data.append({
@@ -56,7 +61,7 @@ def get_nfl_data():
         })
 
     df_final = pd.DataFrame(dashboard_data).sort_values('pq', ascending=False)
-    df_final = df_final.merge(teams_meta[['team', 'logo', 'color']], on='team', how='left')
+    df_final = df_final.merge(teams_meta, on='team', how='left')
     return df_final
 
 # 3. Create the HTML File
@@ -89,9 +94,9 @@ html_template = f"""
     </div>
     <div id="list">
         {"".join([f'''
-        <div class="team-card" style="border-left-color: {r['color']}">
+        <div class="team-card" style="border-left-color: {r.get('color', '#334155')}">
             <div style="width: 25px; font-weight: bold;">{i+1}</div>
-            <img src="{r['logo']}" class="logo">
+            <img src="{r.get('logo', '')}" class="logo">
             <div style="flex-grow:1">
                 <b>{r['team']}</b> ({r['record']})<br>
                 <div class="status-badge" style="background: {r['s_color']}">{r['status']}</div>
