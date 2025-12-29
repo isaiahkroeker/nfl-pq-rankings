@@ -2,18 +2,18 @@ name: NFL PQ Dashboard Update
 
 on:
   schedule:
-    - cron: "23 * * * *"    # Runs every hour at minute 23
-  workflow_dispatch:        # Lets you run it manually whenever you want
+    - cron: "23 * * * *"
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write       # Gives the robot the "Key" to save the website
+      contents: write
     steps:
       - uses: actions/checkout@v3
         with:
-          fetch-depth: 0    # Loads the full history so the push doesn't fail
+          fetch-depth: 0
       
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -23,14 +23,14 @@ jobs:
       - name: Install dependencies
         run: pip install pandas numpy pytz
         
-      - name: Run Ranking Engine
+      - name: Run Engine
         run: python update_rankings.py
         
       - name: Push to Site
         run: |
           git config --global user.name "NFL Stats Bot"
           git config --global user.email "actions@github.com"
-          # IMPORTANT: We only add the HTML file to avoid the 'workflow permission' error
+          # KEY FIX: We specify the file to avoid 'workflow' permission errors
           git add index.html
           git commit -m "Automated PQ Update" || exit 0
           git push --force origin main
