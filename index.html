@@ -1,247 +1,111 @@
+import pandas as pd
+import numpy as np
+from datetime import datetime
+import pytz
 
+# Data Sources
+GAMES_URL = "https://github.com/nflverse/nfldata/raw/master/data/games.csv"
+TEAMS_URL = "https://raw.githubusercontent.com/nflverse/nflfastR-data/master/teams_colors_logos.csv"
+ROSTER_URL = "https://github.com/nflverse/nflverse-data/releases/download/players/players.csv"
+
+def get_nfl_data():
+    # 1. Load Data
+    games = pd.read_csv(GAMES_URL)
+    teams_meta = pd.read_csv(TEAMS_URL)
+    rosters = pd.read_csv(ROSTER_URL)
+    
+    # 2. Smart Year Detection: Use the most recent season in the data
+    current_season = games['season'].max()
+    
+    # 3. Filter for ALL games (Regular + Playoffs)
+    # We remove the "game_type == 'REG'" filter to allow postseason games
+    played = games[(games['season'] == current_season)].dropna(subset=['home_score']).copy()
+    
+    if played.empty: return pd.DataFrame()
+
+    # 4. Setup Team Data
+    rosters = rosters[rosters['status'] == 'Active'][['team_abbr', 'display_name', 'position', 'headshot_url']]
+    team_list = pd.unique(played[['home_team', 'away_team']].values.ravel())
+    max_week = played['week'].max()
+    
+    # Calculate records including playoffs
+    records = {t: {'w': 0, 'l': 0, 'pct': 0} for t in team_list}
+    for t in team_list:
+        tg = played[(played['home_team'] == t) | (played['away_team'] == t)]
+        wins = len(tg[((tg['home_team'] == t) & (tg['home_score'] > tg['away_score'])) | 
+                      ((tg['away_team'] == t) & (tg['away_score'] > tg['home_score']))])
+        records[t] = {'w': wins, 'l': len(tg)-wins, 'pct': wins/len(tg)}
+
+    # 5. Build Dashboard Logic
+    dashboard = []
+    for t in team_list:
+        tg = played[(played['home_team'] == t) | (played['away_team'] == t)]
+        
+        # Power Quotient (PQ) Calculation
+        pq = sum((((g['home_score'] - g['away_score']) if g['home_team'] == t else (g['away_score'] - g['home_score'])) * (records[g['away_team'] if g['home_team'] == t else g['home_team']]['pct'] + 0.1) * (0.95 ** (max_week - g['week']))) for _, g in tg.iterrows())
+        
+        # Prepare Clickable Roster
+        team_p = rosters[rosters['team_abbr'] == t].head(4).to_dict('records')
+        p_html = "".join([f"<div class='p-row'><img src='{p['headshot_url']}' class='p-img'><b>{p['display_name']}</b> <span>{p['position']}</span></div>" for p in team_p])
+
+        # Dynamic Status for Playoffs
+        is_still_in = played[((played['home_team'] == t) | (played['away_team'] == t)) & (played['week'] == max_week)]
+        status = "ALIVE" if not is_still_in.empty else "ELIMINATED"
+        s_color = "#28a745" if status == "ALIVE" else "#dc3545"
+
+        dashboard.append({'team': t, 'pq': round(pq, 2), 'record': f"{records[t]['w']}-{records[t]['l']}", 
+                          'status': status, 's_color': s_color, 'players': p_html})
+
+    return pd.DataFrame(dashboard).sort_values('pq', ascending=False).merge(teams_meta[['team_abbr', 'team_logo_espn', 'team_color']], left_on='team', right_on='team_abbr', how='left')
+
+# RUN AND GENERATE HTML
+data = get_nfl_data()
+time_str = datetime.now(pytz.timezone('US/Eastern')).strftime('%I:%M %p EST')
+
+html_content = f"""
 <!DOCTYPE html>
 <html>
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NFL PQ Dashboard</title>
+    <title>NFL PQ - Postseason</title>
     <style>
-        :root { --bg: #0f172a; --card: #1e293b; --text: #f8fafc; }
-        body { background: var(--bg); color: var(--text); font-family: sans-serif; margin: 0; padding: 15px; }
-        .header { text-align: center; padding: 20px; }
-        .card { background: var(--card); padding: 15px; border-radius: 12px; margin-bottom: 10px; display: flex; align-items: center; border-left: 5px solid; }
-        .logo { width: 45px; height: 45px; margin-right: 15px; }
-        .pq { font-weight: bold; color: #38bdf8; font-size: 1.2em; }
-        .badge { font-size: 0.7em; padding: 4px 8px; border-radius: 6px; margin-top: 5px; display: inline-block; }
+        :root {{ --bg: #0f172a; --card: #1e293b; --text: #f8fafc; --accent: #38bdf8; }}
+        body {{ background: var(--bg); color: var(--text); font-family: sans-serif; padding: 15px; margin: 0; }}
+        .card {{ background: var(--card); border-radius: 12px; padding: 15px; margin-bottom: 10px; display: flex; align-items: center; border-left: 6px solid; cursor: pointer; }}
+        .logo {{ width: 42px; height: 42px; margin-right: 15px; }}
+        .pq-val {{ font-weight: bold; color: var(--accent); font-size: 1.2em; margin-left: auto; }}
+        #modal {{ display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 100; align-items: center; justify-content: center; }}
+        .modal-content {{ background: #1e293b; width: 85%; max-width: 350px; border-radius: 20px; padding: 25px; border: 1px solid #334155; }}
+        .p-row {{ display: flex; align-items: center; padding: 10px 0; border-bottom: 1px solid #334155; }}
+        .p-img {{ width: 45px; height: 45px; border-radius: 50%; margin-right: 12px; }}
+        .close-btn {{ width: 100%; background: #ef4444; border: none; color: white; padding: 12px; border-radius: 10px; margin-top: 20px; font-weight: bold; cursor: pointer; }}
     </style>
 </head>
 <body>
-    <div class="header"><h1>🏈 NFL PQ DASHBOARD</h1><p>Updated: 12:51 AM EST</p></div>
-    <div id="list">
-        
-        <div class="card" style="border-left-color: #002244">
-            <div style="width: 25px; opacity: 0.5;">1</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/sea.png" class="logo">
-            <div style="flex-grow: 1;"><b>SEA</b> (13-3)<br><div class="badge" style="background: #28a745">CLINCHED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">64.08</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #003594">
-            <div style="width: 25px; opacity: 0.5;">2</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/lar.png" class="logo">
-            <div style="flex-grow: 1;"><b>LA</b> (11-4)<br><div class="badge" style="background: #28a745">CLINCHED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">58.71</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #006778">
-            <div style="width: 25px; opacity: 0.5;">3</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/jax.png" class="logo">
-            <div style="flex-grow: 1;"><b>JAX</b> (12-4)<br><div class="badge" style="background: #28a745">CLINCHED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">41.52</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #002244">
-            <div style="width: 25px; opacity: 0.5;">4</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/ne.png" class="logo">
-            <div style="flex-grow: 1;"><b>NE</b> (13-3)<br><div class="badge" style="background: #28a745">CLINCHED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">37.67</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #03202F">
-            <div style="width: 25px; opacity: 0.5;">5</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/hou.png" class="logo">
-            <div style="flex-grow: 1;"><b>HOU</b> (11-5)<br><div class="badge" style="background: #28a745">CLINCHED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">31.6</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #00338D">
-            <div style="width: 25px; opacity: 0.5;">6</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/buf.png" class="logo">
-            <div style="flex-grow: 1;"><b>BUF</b> (11-5)<br><div class="badge" style="background: #28a745">CLINCHED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">29.8</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #AA0000">
-            <div style="width: 25px; opacity: 0.5;">7</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/sf.png" class="logo">
-            <div style="flex-grow: 1;"><b>SF</b> (12-4)<br><div class="badge" style="background: #28a745">CLINCHED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">21.53</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #002244">
-            <div style="width: 25px; opacity: 0.5;">8</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/den.png" class="logo">
-            <div style="flex-grow: 1;"><b>DEN</b> (13-3)<br><div class="badge" style="background: #28a745">CLINCHED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">16.18</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #004C54">
-            <div style="width: 25px; opacity: 0.5;">9</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/phi.png" class="logo">
-            <div style="flex-grow: 1;"><b>PHI</b> (11-5)<br><div class="badge" style="background: #28a745">CLINCHED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">12.94</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #0B162A">
-            <div style="width: 25px; opacity: 0.5;">10</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/chi.png" class="logo">
-            <div style="flex-grow: 1;"><b>CHI</b> (11-5)<br><div class="badge" style="background: #28a745">CLINCHED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">9.3</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #007BC7">
-            <div style="width: 25px; opacity: 0.5;">11</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/lac.png" class="logo">
-            <div style="flex-grow: 1;"><b>LAC</b> (11-5)<br><div class="badge" style="background: #28a745">CLINCHED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">7.98</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #241773">
-            <div style="width: 25px; opacity: 0.5;">12</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/bal.png" class="logo">
-            <div style="flex-grow: 1;"><b>BAL</b> (8-8)<br><div class="badge" style="background: #007bff">IN THE HUNT</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">7.07</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #0076B6">
-            <div style="width: 25px; opacity: 0.5;">13</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/det.png" class="logo">
-            <div style="flex-grow: 1;"><b>DET</b> (8-8)<br><div class="badge" style="background: #007bff">IN THE HUNT</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">6.68</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #203731">
-            <div style="width: 25px; opacity: 0.5;">14</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/gb.png" class="logo">
-            <div style="flex-grow: 1;"><b>GB</b> (9-7)<br><div class="badge" style="background: #007bff">IN THE HUNT</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">5.34</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #000000">
-            <div style="width: 25px; opacity: 0.5;">15</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/pit.png" class="logo">
-            <div style="flex-grow: 1;"><b>PIT</b> (9-7)<br><div class="badge" style="background: #007bff">IN THE HUNT</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">-6.1</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #E31837">
-            <div style="width: 25px; opacity: 0.5;">16</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/kc.png" class="logo">
-            <div style="flex-grow: 1;"><b>KC</b> (6-10)<br><div class="badge" style="background: #dc3545">ELIMINATED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">-9.75</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #002C5F">
-            <div style="width: 25px; opacity: 0.5;">17</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/ind.png" class="logo">
-            <div style="flex-grow: 1;"><b>IND</b> (8-8)<br><div class="badge" style="background: #007bff">IN THE HUNT</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">-18.72</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #008E97">
-            <div style="width: 25px; opacity: 0.5;">18</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/mia.png" class="logo">
-            <div style="flex-grow: 1;"><b>MIA</b> (7-9)<br><div class="badge" style="background: #007bff">IN THE HUNT</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">-19.8</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #4F2683">
-            <div style="width: 25px; opacity: 0.5;">19</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/min.png" class="logo">
-            <div style="flex-grow: 1;"><b>MIN</b> (8-8)<br><div class="badge" style="background: #007bff">IN THE HUNT</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">-19.91</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #A71930">
-            <div style="width: 25px; opacity: 0.5;">20</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/tb.png" class="logo">
-            <div style="flex-grow: 1;"><b>TB</b> (7-9)<br><div class="badge" style="background: #007bff">IN THE HUNT</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">-25.97</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #002244">
-            <div style="width: 25px; opacity: 0.5;">21</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/dal.png" class="logo">
-            <div style="flex-grow: 1;"><b>DAL</b> (7-9)<br><div class="badge" style="background: #007bff">IN THE HUNT</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">-31.01</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #A71930">
-            <div style="width: 25px; opacity: 0.5;">22</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/atl.png" class="logo">
-            <div style="flex-grow: 1;"><b>ATL</b> (6-9)<br><div class="badge" style="background: #dc3545">ELIMINATED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">-32.03</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #FB4F14">
-            <div style="width: 25px; opacity: 0.5;">23</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/cin.png" class="logo">
-            <div style="flex-grow: 1;"><b>CIN</b> (6-10)<br><div class="badge" style="background: #dc3545">ELIMINATED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">-34.36</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #0B2265">
-            <div style="width: 25px; opacity: 0.5;">24</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/nyg.png" class="logo">
-            <div style="flex-grow: 1;"><b>NYG</b> (3-13)<br><div class="badge" style="background: #dc3545">ELIMINATED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">-36.51</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #D3BC8D">
-            <div style="width: 25px; opacity: 0.5;">25</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/no.png" class="logo">
-            <div style="flex-grow: 1;"><b>NO</b> (6-10)<br><div class="badge" style="background: #dc3545">ELIMINATED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">-39.38</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #0085CA">
-            <div style="width: 25px; opacity: 0.5;">26</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500-dark/car.png" class="logo">
-            <div style="flex-grow: 1;"><b>CAR</b> (8-8)<br><div class="badge" style="background: #007bff">IN THE HUNT</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">-46.67</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #FF3C00">
-            <div style="width: 25px; opacity: 0.5;">27</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/cle.png" class="logo">
-            <div style="flex-grow: 1;"><b>CLE</b> (4-12)<br><div class="badge" style="background: #dc3545">ELIMINATED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">-55.27</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #5A1414">
-            <div style="width: 25px; opacity: 0.5;">28</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/wsh.png" class="logo">
-            <div style="flex-grow: 1;"><b>WAS</b> (4-12)<br><div class="badge" style="background: #dc3545">ELIMINATED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">-58.92</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #002244">
-            <div style="width: 25px; opacity: 0.5;">29</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/ten.png" class="logo">
-            <div style="flex-grow: 1;"><b>TEN</b> (3-13)<br><div class="badge" style="background: #dc3545">ELIMINATED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">-75.67</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #97233F">
-            <div style="width: 25px; opacity: 0.5;">30</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/ari.png" class="logo">
-            <div style="flex-grow: 1;"><b>ARI</b> (3-13)<br><div class="badge" style="background: #dc3545">ELIMINATED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">-76.15</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #000000">
-            <div style="width: 25px; opacity: 0.5;">31</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/lv.png" class="logo">
-            <div style="flex-grow: 1;"><b>LV</b> (2-14)<br><div class="badge" style="background: #dc3545">ELIMINATED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">-82.51</span></div>
-        </div>
-        
-        <div class="card" style="border-left-color: #003F2D">
-            <div style="width: 25px; opacity: 0.5;">32</div>
-            <img src="https://a.espncdn.com/i/teamlogos/nfl/500/nyj.png" class="logo">
-            <div style="flex-grow: 1;"><b>NYJ</b> (3-13)<br><div class="badge" style="background: #dc3545">ELIMINATED</div></div>
-            <div style="text-align: right;"><small>PQ</small><br><span class="pq">-101.61</span></div>
-        </div>
-        
+    <div style="text-align:center;"><h1>🏆 PLAYOFF PQ</h1><p><b>{time_str}</b> | Tap for rosters</p></div>
+    {"".join([f'''
+    <div class="card" style="border-left-color: {r['team_color']}" onclick="openModal('{r['team']}', `{r['players']}`)">
+        <img src="{r['team_logo_espn']}" class="logo">
+        <div><b>{r['team']}</b><br><small>{r['record']} • <span style="color:{r['s_color']}">{r['status']}</span></small></div>
+        <div class="pq-val">{r['pq']}</div>
     </div>
+    ''' for i, r in data.iterrows()])}
+    <div id="modal" onclick="closeModal()">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <h2 id="m-title" style="margin-top:0;"></h2>
+            <div id="m-body"></div>
+            <button class="close-btn" onclick="closeModal()">CLOSE</button>
+        </div>
+    </div>
+    <script>
+        function openModal(name, players) {{
+            document.getElementById('m-title').innerText = name;
+            document.getElementById('m-body').innerHTML = players;
+            document.getElementById('modal').style.display = 'flex';
+        }}
+        function closeModal() {{ document.getElementById('modal').style.display = 'none'; }}
+    </script>
 </body>
 </html>
+"""
+with open("index.html", "w") as f: f.write(html_content)
