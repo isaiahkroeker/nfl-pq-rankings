@@ -2,14 +2,14 @@ name: NFL PQ Dashboard Update
 
 on:
   schedule:
-    - cron: "23 * * * *"
-  workflow_dispatch:
+    - cron: "23 * * * *" # Runs every hour
+  workflow_dispatch: # Allows you to run it manually
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # Crucial for the robot to save the file
     steps:
       - uses: actions/checkout@v4
       
@@ -19,7 +19,7 @@ jobs:
           python-version: '3.9'
           
       - name: Install dependencies
-        run: pip install pandas numpy pytz
+        run: pip install pandas numpy pytz # The robot needs these 3 tools
         
       - name: Run Engine
         run: python update_rankings.py
